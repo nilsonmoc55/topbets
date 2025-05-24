@@ -1,0 +1,343 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Untitled Document</title>
+</head>
+
+<body>
+</body>
+</html><?php
+include 'includes/conexao.php';
+session_start();
+
+// Verifica se usuário está logado
+$usuarioLogado = isset($_SESSION['usuario_id']);
+$usuarioNome = $_SESSION['usuario_nome'] ?? '';
+
+// Ordenação e filtros
+$ordenacao = isset($_GET['ordenar']) ? filter_var($_GET['ordenar'], FILTER_SANITIZE_STRING) : 'melhor';
+$filtro_bonus = isset($_GET['bonus']) ? filter_var($_GET['bonus'], FILTER_SANITIZE_STRING) : 'todos';
+
+// Query dinâmica
+$order_sql = "ORDER BY media_nota DESC";
+$where_bonus = "";
+
+if ($filtro_bonus === 'com') {
+    $where_bonus = "AND bonus = 1";
+} elseif ($filtro_bonus === 'sem') {
+    $where_bonus = "AND (bonus = 0 OR bonus IS NULL)";
+}
+
+// Busca bets cadastradas
+$sql = "SELECT b.id, b.nome, b.url, b.logo, 
+        COALESCE(AVG(a.nota), 0) as media_nota,
+        COUNT(a.id) as total_avaliacoes,
+        MAX(a.bonus) as bonus
+        FROM bets b
+        LEFT JOIN avaliacoes a ON b.id = a.bet_id
+        WHERE b.ativo = 1 $where_bonus
+        GROUP BY b.id
+        $order_sql
+        LIMIT 12";
+$bets = $conn->query($sql);
+
+// Dados para o carrossel
+$destaques = $conn->query("SELECT * FROM anuncios WHERE ativo = 1 LIMIT 5");
+?>
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TopBets - Melhores Sites de Apostas</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/estilo.css">
+    <link rel="stylesheet" href="css/carrossel.css">
+</head>
+<body>
+    <?php include 'includes/header.php'; ?>
+    
+    <?php include 'includes/carrossel.php'; ?>
+    
+    <div class="container mt-4 mb-4">
+        <?php
+        $banner = $conn->query("SELECT * FROM anuncios WHERE posicao = 'topo' AND ativo = 1 LIMIT 1");
+        if ($banner->num_rows > 0):
+            $banner = $banner->fetch_assoc();
+            $conn->query("UPDATE anuncios SET impressoes = impressoes + 1 WHERE id = {$banner['id']}");
+        ?>
+        <div class="banner-container text-center">
+            <?php if ($banner['tipo'] === 'propio' && !empty($banner['imagem'])): ?>
+                <a href="<?= $banner['url'] ?>?ref=topbets" target="_blank" onClick="registrarClique(<?= $banner['id'] ?>)">
+                    <img src="uploads/anuncios/<?= $banner['imagem'] ?>" class="img-fluid rounded" alt="<?= htmlspecialchars($banner['titulo']) ?>">
+                </a>
+            <?php elseif (!empty($banner['codigo'])): ?>
+                <div class="banner-html">
+                    <?= htmlspecialchars_decode($banner['codigo']) ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
+
+        <div class="text-center mt-4">
+            <button class="btn btn-primary btn-lg shadow" id="btnIniciarAvaliacao">
+                <i class="fas fa-star me-2"></i> Avaliar Casa de Aposta
+            </button>
+        </div>
+    </div>
+    
+    <?php include 'includes/filtros.php'; ?>
+    
+    <?php include 'includes/lista-bets.php'; ?>
+    
+   <!-- Modal Único de Avaliação -->
+<div class="modal fade" id="modalAvaliacao" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div id="modalAvaliacaoContent"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal de Recuperação de Senha -->
+<div class="modal fade" id="modalRecuperarSenha" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Recuperar Senha</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="formRecuperarSenha">
+                    <div class="mb-3">
+                        <label for="emailRecuperacao" class="form-label">Digite seu e-mail</label>
+                        <input type="email" class="form-control" id="emailRecuperacao" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Enviar Link</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php include 'includes/footer.php'; ?>
+
+<!-- jQuery (necessário para o AJAX) -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+<!-- Scripts personalizados -->
+<script src="assets/js/form-cadastro.js"></script>
+
+<!-- Bootstrap JS + Popper -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    
+    <!-- Script principal atualizado -->
+<script>
+$(document).ready(function() {
+    const app = {
+        currentBet: { id: null, nome: null, usuario: null },
+
+        init: function() {
+            this.bindEvents();
+        },
+
+        bindEvents: function() {
+            $('#btnIniciarAvaliacao').click((e) => {
+                e.preventDefault();
+                this.loadStep('lista-bets');
+            });
+
+            $(document).on('click', '.bet-card-avaliacao', (e) => {
+                e.preventDefault();
+                const card = $(e.currentTarget);
+                this.currentBet = {
+                    id: card.data('bet-id'),
+                    nome: card.data('bet-nome')
+                };
+                this.loadStep('escolha-login');
+            });
+
+            $(document)
+                .on('click', '#btnAvaliarComoUsuario', (e) => {
+                    e.preventDefault();
+                    this.loadStep('formulario-avaliacao', { anonimo: 0 });
+                })
+                .on('click', '#btnAvaliarAnonimamente', (e) => {
+                    e.preventDefault();
+                    this.loadStep('formulario-avaliacao', { anonimo: 1 });
+                })
+                .on('click', '#btnFazerLogin', (e) => {
+                    e.preventDefault();
+                    this.loadStep('login-form');
+                })
+                .on('click', '#btnCadastrar', (e) => {
+                    e.preventDefault();
+                    this.loadStep('cadastro-form');
+                })
+                .on('submit', '#formLogin', (e) => this.handleLoginSubmit(e))
+                .on('submit', '#formCadastro', (e) => this.handleCadastroSubmit(e))
+                .on('submit', '#formAvaliacao', (e) => this.handleAvaliacaoSubmit(e))
+                .on('click', '.linkRecuperarSenha', (e) => {
+                    e.preventDefault();
+                    $('#modalAvaliacao').modal('hide');
+                    setTimeout(() => $('#modalRecuperarSenha').modal('show'), 300);
+                })
+                .on('blur input', '#cadastroNome', () => this.validateNome())
+                .on('blur input', '#cadastroSenha', () => this.validateSenha())
+                .on('blur input', '#cadastroConfirmarSenha', () => this.validateSenhaConfirmacao())
+                .on('change', '#termosCheck', function() {
+                    $(this).removeClass('is-invalid');
+                });
+        },
+
+        loadStep: function(step, data = {}) {
+            const postData = { ...this.currentBet, ...data };
+            $.ajax({
+                url: `includes/modais/steps/step-${step}.php`,
+                type: 'POST',
+                data: postData,
+                success: (response) => {
+                    $('#modalAvaliacaoContent').html(response);
+                    this.showModal();
+                    if (step === 'formulario-avaliacao') {
+                        $('#modalAvaliacao .modal-title').text(`Avaliar ${this.currentBet.nome}`);
+                    }
+                },
+                error: () => {
+                    this.showError('Erro ao carregar. Por favor, tente novamente.');
+                }
+            });
+        },
+
+        validateNome: function() {
+            const nome = $('#cadastroNome');
+            if (nome.val().length > 0 && nome.val().length < 3) {
+                nome.addClass('is-invalid');
+            } else {
+                nome.removeClass('is-invalid');
+            }
+        },
+
+        validateSenha: function() {
+            const senha = $('#cadastroSenha');
+            if (senha.val().length > 0 && senha.val().length < 6) {
+                senha.addClass('is-invalid');
+            } else {
+                senha.removeClass('is-invalid');
+            }
+        },
+
+        validateSenhaConfirmacao: function() {
+            const confirmacao = $('#cadastroConfirmarSenha');
+            const senha = $('#cadastroSenha').val();
+            if (confirmacao.val().length > 0 && confirmacao.val() !== senha) {
+                confirmacao.addClass('is-invalid');
+            } else {
+                confirmacao.removeClass('is-invalid');
+            }
+        },
+
+        handleCadastroSubmit: function(e) {
+            e.preventDefault();
+            const form = $('#formCadastro');
+            const btnSubmit = $('#btnSubmitCadastro');
+
+            form.find('.is-invalid').removeClass('is-invalid');
+            $('#cadastroError').addClass('d-none');
+            $('#emailCadastradoMsg').addClass('d-none');
+
+            let isValid = true;
+
+            if ($('#cadastroNome').val().length < 3) {
+                $('#cadastroNome').addClass('is-invalid');
+                isValid = false;
+            }
+
+            if (!$('#cadastroEmail').val()) {
+                $('#cadastroEmail').addClass('is-invalid');
+                isValid = false;
+            }
+
+            if ($('#cadastroSenha').val().length < 6) {
+                $('#cadastroSenha').addClass('is-invalid');
+                isValid = false;
+            }
+
+            if ($('#cadastroSenha').val() !== $('#cadastroConfirmarSenha').val()) {
+                $('#cadastroConfirmarSenha').addClass('is-invalid');
+                isValid = false;
+            }
+
+            if (!$('#termosCheck').is(':checked')) {
+                $('#termosCheck').addClass('is-invalid');
+                isValid = false;
+            }
+
+            if (!isValid) {
+                this.showCadastroError('Por favor, corrija os campos destacados');
+                return;
+            }
+
+            btnSubmit.prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-2"></i> Cadastrando...');
+
+            $.ajax({
+                url: 'includes/cadastro.php',
+                type: 'POST',
+                data: form.serialize() + '&bet_id=' + this.currentBet.id + '&bet_nome=' + encodeURIComponent(this.currentBet.nome),
+                dataType: 'json',
+                success: (response) => {
+                    if (response.success) {
+                        this.currentBet.usuario = response.usuario;
+                        this.showSuccess('Cadastro realizado com sucesso!');
+                        this.loadStep('formulario-avaliacao', { anonimo: 0 });
+                    } else {
+                        if (response.message.includes('já está cadastrado')) {
+                            $('#cadastroEmail').addClass('is-invalid');
+                            this.showCadastroError(response.message, true);
+                        } else {
+                            this.showCadastroError(response.message);
+                        }
+                    }
+                },
+                error: (xhr) => {
+                    let errorMsg = 'Erro ao conectar com o servidor';
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        errorMsg = xhr.responseJSON.message;
+                    }
+                    this.showCadastroError(errorMsg);
+                },
+                complete: () => {
+                    btnSubmit.prop('disabled', false).html('<i class="fas fa-user-plus me-2"></i> Cadastrar');
+                }
+            });
+        },
+
+        showModal: function() {
+            $('#modalAvaliacao').modal('show');
+        },
+
+        showSuccess: function(msg) {
+            alert(msg); // Substitua por SweetAlert ou Toast se quiser algo mais sofisticado
+        },
+
+        showCadastroError: function(msg, emailJaCadastrado = false) {
+            $('#cadastroError').removeClass('d-none').text(msg);
+            if (emailJaCadastrado) {
+                $('#emailCadastradoMsg').removeClass('d-none');
+            }
+        },
+
+        showError: function(msg) {
+            alert(msg);
+        }
+    };
+
+    app.init();
+});
+</script>
+
+</body>
+</html>

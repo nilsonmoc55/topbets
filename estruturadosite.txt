@@ -1,0 +1,13 @@
+├── index.php
+├── includes/
+│   ├── conexao.php
+│   ├── header.php
+│   ├── footer.php
+│   ├── carrossel.php
+│   ├── filtros.php
+│   ├── lista-bets.php
+│   ├── modais.php
+│   └── scripts.php
+├── css/
+├── js/
+└── img/
